@@ -3,6 +3,7 @@ import { Info as InfoIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { VisuallyHidden } from "./ui/visually-hidden";
 import { About } from "./About";
+import { APP_NAME } from '@/lib/branding';
 
 interface InfoProps {
     isCollapsed: boolean;
@@ -19,17 +20,17 @@ const Info = React.forwardRef<HTMLButtonElement, InfoProps>(({ isCollapsed }, re
               ? "bg-transparent p-2 hover:bg-gray-100 rounded-lg" 
               : "w-full px-3 py-1.5 mt-1 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-200 rounded-lg shadow-sm"
           }`}
-          title="About Meetily"
+          title={`${APP_NAME} 정보`}
         >
           <InfoIcon className={`text-gray-600 ${isCollapsed ? "w-5 h-5" : "w-4 h-4"}`} />
           {!isCollapsed && (
-            <span className="ml-2 text-sm text-gray-700">About</span>
+            <span className="ml-2 text-sm text-gray-700">정보</span>
           )}
         </button>
       </DialogTrigger>
       <DialogContent>
         <VisuallyHidden>
-          <DialogTitle>About Meetily</DialogTitle>
+          <DialogTitle>{`${APP_NAME} 정보`}</DialogTitle>
         </VisuallyHidden>
         <About />
       </DialogContent>
@@ -39,4 +40,4 @@ const Info = React.forwardRef<HTMLButtonElement, InfoProps>(({ isCollapsed }, re
 
 Info.displayName = "About";
 
-export default Info; 
+export default Info;
