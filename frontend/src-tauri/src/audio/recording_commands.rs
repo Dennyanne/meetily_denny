@@ -266,6 +266,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                 let segment = crate::audio::recording_saver::TranscriptSegment {
                     id: format!("seg_{}", update.sequence_id),
                     text: update.text.clone(),
+                    speaker_label: update.speaker_label.clone(),
                     audio_start_time: update.audio_start_time,
                     audio_end_time: update.audio_end_time,
                     duration: update.duration,
@@ -434,6 +435,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                 let segment = crate::audio::recording_saver::TranscriptSegment {
                     id: format!("seg_{}", update.sequence_id),
                     text: update.text.clone(),
+                    speaker_label: update.speaker_label.clone(),
                     audio_start_time: update.audio_start_time,
                     audio_end_time: update.audio_end_time,
                     duration: update.duration,

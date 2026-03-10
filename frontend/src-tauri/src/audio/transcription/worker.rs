@@ -5,6 +5,7 @@
 use super::engine::TranscriptionEngine;
 use super::provider::TranscriptionError;
 use crate::audio::AudioChunk;
+use crate::audio::transcription::speaker_diarization::SpeakerDiarizer;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -32,6 +33,7 @@ pub struct TranscriptUpdate {
     pub chunk_start_time: f64, // Legacy field, kept for compatibility
     pub is_partial: bool,
     pub confidence: f32,
+    pub speaker_label: Option<String>,
     // NEW: Recording-relative timestamps for playback sync
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
@@ -67,6 +69,7 @@ pub fn start_transcription_task<R: Runtime>(
         const NUM_WORKERS: usize = 1; // Serial processing ensures transcripts emit in chronological order
         let (work_sender, work_receiver) = tokio::sync::mpsc::unbounded_channel::<AudioChunk>();
         let work_receiver = Arc::new(tokio::sync::Mutex::new(work_receiver));
+        let speaker_diarizer = Arc::new(tokio::sync::Mutex::new(SpeakerDiarizer::new()));
 
         // Track completion: AtomicU64 for chunks queued, AtomicU64 for chunks completed
         let chunks_queued = Arc::new(AtomicU64::new(0));
@@ -88,6 +91,7 @@ pub fn start_transcription_task<R: Runtime>(
             let chunks_completed_clone = chunks_completed.clone();
             let input_finished_clone = input_finished.clone();
             let chunks_queued_clone = chunks_queued.clone();
+            let speaker_diarizer_clone = speaker_diarizer.clone();
 
             let worker_handle = tokio::spawn(async move {
                 info!("👷 Worker {} started", worker_id);
@@ -142,6 +146,10 @@ pub fn start_transcription_task<R: Runtime>(
 
                             let chunk_timestamp = chunk.timestamp;
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
+                            let speaker_label = {
+                                let mut diarizer = speaker_diarizer_clone.lock().await;
+                                diarizer.identify_speaker(&chunk.data, chunk.sample_rate)
+                            };
 
                             // Transcribe with provider-agnostic approach
                             match transcribe_chunk_with_provider(
@@ -213,6 +221,7 @@ pub fn start_transcription_task<R: Runtime>(
                                             chunk_start_time: chunk_timestamp, // Legacy compatibility
                                             is_partial,
                                             confidence: confidence_opt.unwrap_or(0.85), // Default for providers without confidence
+                                            speaker_label,
                                             // NEW: Recording-relative timestamps for sync
                                             audio_start_time,
                                             audio_end_time,

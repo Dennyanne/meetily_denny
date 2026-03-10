@@ -48,6 +48,7 @@ pub(crate) fn create_transcript_segments(transcripts: &[(String, f64, f64)]) -> 
                 id: format!("transcript-{}", Uuid::new_v4()),
                 text: text.trim().to_string(),
                 timestamp: chrono::Utc::now().to_rfc3339(),
+                speaker_label: None,
                 audio_start_time: Some(start_seconds),
                 audio_end_time: Some(end_seconds),
                 duration: Some(duration),
