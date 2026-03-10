@@ -10,6 +10,7 @@ import { RecordingSettings } from '@/components/RecordingSettings';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
 import { SummaryModelSettings } from '@/components/SummaryModelSettings';
 import { BetaSettings } from '@/components/BetaSettings';
+import { LanguageSelection } from '@/components/LanguageSelection';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
@@ -24,7 +25,12 @@ const TABS = [
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { transcriptModelConfig, setTranscriptModelConfig } = useConfig();
+  const {
+    transcriptModelConfig,
+    setTranscriptModelConfig,
+    selectedLanguage,
+    setSelectedLanguage,
+  } = useConfig();
 
   // Animation state for tabs
   const [activeTab, setActiveTab] = useState('general');
@@ -116,10 +122,22 @@ export default function SettingsPage() {
               <RecordingSettings />
             </TabsContent>
             <TabsContent value="Transcriptionmodels">
-              <TranscriptSettings
-                transcriptModelConfig={transcriptModelConfig}
-                setTranscriptModelConfig={setTranscriptModelConfig}
-              />
+              <div className="space-y-6">
+                <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+                  <TranscriptSettings
+                    transcriptModelConfig={transcriptModelConfig}
+                    setTranscriptModelConfig={setTranscriptModelConfig}
+                  />
+                </div>
+
+                <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+                  <LanguageSelection
+                    selectedLanguage={selectedLanguage}
+                    onLanguageChange={setSelectedLanguage}
+                    provider={transcriptModelConfig.provider}
+                  />
+                </div>
+              </div>
             </TabsContent>
             <TabsContent value="summaryModels">
               <SummaryModelSettings />
