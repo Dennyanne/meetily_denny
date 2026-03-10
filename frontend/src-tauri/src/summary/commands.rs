@@ -1,12 +1,16 @@
 use crate::database::repositories::{
-    meeting::MeetingsRepository, summary::SummaryProcessesRepository,
+    meeting::MeetingsRepository, setting::SettingsRepository, summary::SummaryProcessesRepository,
     transcript_chunk::TranscriptChunksRepository,
 };
 use crate::state::AppState;
+use crate::summary::llm_client::LLMProvider;
+use crate::summary::processor::{
+    segment_meeting_topics, TopicAnalysisResult, TopicAnalysisSegment,
+};
 use crate::summary::service::SummaryService;
 use log::{error as log_error, info as log_info, warn as log_warn};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SummaryResponse {
@@ -24,6 +28,21 @@ pub struct SummaryResponse {
 pub struct ProcessTranscriptResponse {
     pub message: String,
     pub process_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicSegmentationResponse {
+    pub topics: Vec<crate::summary::processor::TopicAnalysisTopic>,
+    pub analyzed_segment_count: usize,
+    pub provider: String,
+    pub model: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedTopicSegmentationResponse {
+    pub data: Option<TopicSegmentationResponse>,
 }
 
 /// Saves a meeting summary (Native SQLx implementation)
@@ -237,6 +256,122 @@ pub async fn api_process_transcript<R: Runtime>(
         message: "Summary generation started".to_string(),
         process_id: m_id,
     })
+}
+
+#[tauri::command]
+pub async fn api_segment_topics<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    segments: Vec<TopicAnalysisSegment>,
+    model: String,
+    model_name: String,
+) -> Result<TopicSegmentationResponse, String> {
+    let pool = state.db_manager.pool();
+
+    let provider = LLMProvider::from_str(&model)?;
+
+    let api_key = if provider == LLMProvider::Ollama
+        || provider == LLMProvider::BuiltInAI
+        || provider == LLMProvider::CustomOpenAI
+    {
+        String::new()
+    } else {
+        match SettingsRepository::get_api_key(pool, &model).await {
+            Ok(Some(key)) if !key.is_empty() => key,
+            Ok(_) => return Err(format!("API key not found for {}", model)),
+            Err(e) => return Err(format!("Failed to retrieve API key for {}: {}", model, e)),
+        }
+    };
+
+    let ollama_endpoint = if provider == LLMProvider::Ollama {
+        match SettingsRepository::get_model_config(pool).await {
+            Ok(Some(config)) => config.ollama_endpoint,
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let (custom_openai_endpoint, custom_openai_api_key, custom_openai_max_tokens, custom_openai_temperature, custom_openai_top_p) =
+        if provider == LLMProvider::CustomOpenAI {
+            match SettingsRepository::get_custom_openai_config(pool).await {
+                Ok(Some(config)) => (
+                    Some(config.endpoint),
+                    config.api_key,
+                    config.max_tokens.map(|value| value as u32),
+                    config.temperature,
+                    config.top_p,
+                ),
+                Ok(None) => return Err("Custom OpenAI provider selected but no configuration found".to_string()),
+                Err(e) => return Err(format!("Failed to retrieve custom OpenAI config: {}", e)),
+            }
+        } else {
+            (None, None, None, None, None)
+        };
+
+    let final_api_key = if provider == LLMProvider::CustomOpenAI {
+        custom_openai_api_key.unwrap_or_default()
+    } else {
+        api_key
+    };
+
+    let app_data_dir = app.path().app_data_dir().ok();
+    let client = reqwest::Client::new();
+    let TopicAnalysisResult { topics } = segment_meeting_topics(
+        &client,
+        &provider,
+        &model_name,
+        &final_api_key,
+        &segments,
+        ollama_endpoint.as_deref(),
+        custom_openai_endpoint.as_deref(),
+        custom_openai_max_tokens,
+        custom_openai_temperature,
+        custom_openai_top_p,
+        app_data_dir.as_ref(),
+    )
+    .await?;
+
+    Ok(TopicSegmentationResponse {
+        topics,
+        analyzed_segment_count: segments.len(),
+        provider: model,
+        model: model_name,
+    })
+}
+
+#[tauri::command]
+pub async fn api_get_topic_segmentation<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+) -> Result<SavedTopicSegmentationResponse, String> {
+    let pool = state.db_manager.pool();
+
+    let data = SummaryProcessesRepository::get_topic_metadata(pool, &meeting_id)
+        .await
+        .map_err(|e| format!("Failed to fetch topic metadata: {}", e))?
+        .and_then(|metadata| serde_json::from_value::<TopicSegmentationResponse>(metadata).ok());
+
+    Ok(SavedTopicSegmentationResponse { data })
+}
+
+#[tauri::command]
+pub async fn api_save_topic_segmentation<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    segmentation: TopicSegmentationResponse,
+) -> Result<serde_json::Value, String> {
+    let pool = state.db_manager.pool();
+    let metadata = serde_json::to_value(segmentation)
+        .map_err(|e| format!("Failed to serialize topic segmentation: {}", e))?;
+
+    SummaryProcessesRepository::upsert_topic_metadata(pool, &meeting_id, &metadata)
+        .await
+        .map_err(|e| format!("Failed to save topic metadata: {}", e))?;
+
+    Ok(serde_json::json!({ "message": "Topic segmentation saved successfully" }))
 }
 
 /// Cancels an ongoing summary generation process

@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
+import { APP_NAME } from '@/lib/branding';
 
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
@@ -69,6 +70,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
     timestamp,
     text,
     confidence,
+    speakerLabel,
+    topicTitle,
+    isTopicStart,
     isStreaming,
     showConfidence,
 }: {
@@ -76,6 +80,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
     timestamp: number;
     text: string;
     confidence?: number;
+    speakerLabel?: string;
+    topicTitle?: string;
+    isTopicStart?: boolean;
     isStreaming: boolean;
     showConfidence: boolean;
 }) {
@@ -83,6 +90,13 @@ const TranscriptSegment = memo(function TranscriptSegment({
 
     return (
         <div id={`segment-${id}`} className="mb-3">
+            {isTopicStart && topicTitle && (
+                <div className="mb-3 mt-1">
+                    <div className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+                        {topicTitle}
+                    </div>
+                </div>
+            )}
             <div className="flex items-start gap-2">
                 <Tooltip>
                     <TooltipTrigger>
@@ -97,6 +111,11 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     </TooltipContent>
                 </Tooltip>
                 <div className="flex-1">
+                    {speakerLabel && (
+                        <div className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">
+                            {speakerLabel}
+                        </div>
+                    )}
                     {isStreaming ? (
                         <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
                             <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
@@ -257,7 +276,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                         </>
                     ) : (
                         <>
-                            <p className="text-lg font-semibold">Welcome to meetily!</p>
+                            <p className="text-lg font-semibold">{`Welcome to ${APP_NAME}!`}</p>
                             <p className="text-xs mt-1">Start recording to see live transcription</p>
                         </>
                     )}
@@ -294,6 +313,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         timestamp={segment.timestamp}
                                         text={getDisplayText(segment)}
                                         confidence={segment.confidence}
+                                        speakerLabel={segment.speakerLabel}
+                                        topicTitle={segment.topicTitle}
+                                        isTopicStart={segment.isTopicStart}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
                                     />
@@ -350,6 +372,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         timestamp={segment.timestamp}
                                         text={getDisplayText(segment)}
                                         confidence={segment.confidence}
+                                        speakerLabel={segment.speakerLabel}
+                                        topicTitle={segment.topicTitle}
+                                        isTopicStart={segment.isTopicStart}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
                                     />

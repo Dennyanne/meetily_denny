@@ -9,6 +9,7 @@ import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
 import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
 import Analytics from '@/lib/analytics';
 import { RefObject } from 'react';
+import { collectMeetingSpeakers } from '@/lib/transcriptAnalysis';
 
 interface SummaryPanelProps {
   meeting: {
@@ -86,6 +87,7 @@ export function SummaryPanel({
   onOpenModelSettings
 }: SummaryPanelProps) {
   const isSummaryLoading = summaryStatus === 'processing' || summaryStatus === 'summarizing' || summaryStatus === 'regenerating';
+  const speakers = collectMeetingSpeakers(transcripts);
 
   return (
     <div className="flex-1 min-w-0 flex flex-col bg-white overflow-hidden">
@@ -261,6 +263,21 @@ export function SummaryPanel({
                 created_at: meeting.created_at
               }}
             />
+            {speakers.length > 0 && (
+              <div className="mt-6 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <h3 className="text-sm font-semibold text-gray-900">Speakers</h3>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {speakers.map((speaker) => (
+                    <span
+                      key={speaker}
+                      className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-700"
+                    >
+                      {speaker}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           {summaryStatus !== 'idle' && (
             <div className={`mt-4 p-4 rounded-lg ${summaryStatus === 'error' ? 'bg-red-100 text-red-700' :

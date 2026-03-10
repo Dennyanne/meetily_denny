@@ -218,4 +218,51 @@ impl SummaryProcessesRepository {
         );
         Ok(())
     }
+
+    pub async fn get_topic_metadata(
+        pool: &SqlitePool,
+        meeting_id: &str,
+    ) -> Result<Option<Value>, sqlx::Error> {
+        let row = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT metadata FROM summary_processes WHERE meeting_id = ?"
+        )
+        .bind(meeting_id)
+        .fetch_optional(pool)
+        .await?;
+
+        match row.flatten() {
+            Some(metadata) => serde_json::from_str::<Value>(&metadata)
+                .map(Some)
+                .map_err(|e| sqlx::Error::Protocol(format!("Failed to parse topic metadata JSON: {}", e))),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn upsert_topic_metadata(
+        pool: &SqlitePool,
+        meeting_id: &str,
+        metadata: &Value,
+    ) -> Result<(), sqlx::Error> {
+        let metadata_str = serde_json::to_string(metadata)
+            .map_err(|e| sqlx::Error::Protocol(format!("Failed to serialize topic metadata: {}", e)))?;
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO summary_processes (meeting_id, status, created_at, updated_at, metadata)
+            VALUES (?, 'idle', ?, ?, ?)
+            ON CONFLICT(meeting_id) DO UPDATE SET
+                metadata = excluded.metadata,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(meeting_id)
+        .bind(now)
+        .bind(now)
+        .bind(metadata_str)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
 }

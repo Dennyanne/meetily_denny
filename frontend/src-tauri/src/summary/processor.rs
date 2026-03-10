@@ -3,6 +3,7 @@ use crate::summary::templates;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -11,6 +12,31 @@ use tracing::{error, info};
 static THINKING_TAG_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?s)<think(?:ing)?>.*?</think(?:ing)?>").unwrap()
 });
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicAnalysisSegment {
+    pub id: String,
+    pub start_ms: u64,
+    pub end_ms: Option<u64>,
+    pub text: String,
+    pub speaker_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicAnalysisTopic {
+    pub id: String,
+    pub title: String,
+    pub segment_ids: Vec<String>,
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicAnalysisResult {
+    pub topics: Vec<TopicAnalysisTopic>,
+}
 
 /// Rough token count estimation using character count
 pub fn rough_token_count(s: &str) -> usize {
@@ -119,6 +145,27 @@ pub fn clean_llm_markdown_output(markdown: &str) -> String {
 
     // If no fences found, return the trimmed string
     trimmed.to_string()
+}
+
+pub fn extract_json_payload(raw: &str) -> Result<String, String> {
+    let cleaned = clean_llm_markdown_output(raw);
+
+    if serde_json::from_str::<serde_json::Value>(&cleaned).is_ok() {
+        return Ok(cleaned);
+    }
+
+    let start = cleaned
+        .find('{')
+        .ok_or_else(|| "No JSON object found in LLM response".to_string())?;
+    let end = cleaned
+        .rfind('}')
+        .ok_or_else(|| "No JSON object terminator found in LLM response".to_string())?;
+
+    let candidate = cleaned[start..=end].trim().to_string();
+    serde_json::from_str::<serde_json::Value>(&candidate)
+        .map_err(|e| format!("Failed to parse LLM JSON payload: {}", e))?;
+
+    Ok(candidate)
 }
 
 /// Extracts meeting name from the first heading in markdown
@@ -379,4 +426,201 @@ pub async fn generate_meeting_summary(
 
     info!("Summary generation completed successfully");
     Ok((final_markdown, successful_chunk_count))
+}
+
+pub async fn segment_meeting_topics(
+    client: &Client,
+    provider: &LLMProvider,
+    model_name: &str,
+    api_key: &str,
+    segments: &[TopicAnalysisSegment],
+    ollama_endpoint: Option<&str>,
+    custom_openai_endpoint: Option<&str>,
+    max_tokens: Option<u32>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
+    app_data_dir: Option<&PathBuf>,
+) -> Result<TopicAnalysisResult, String> {
+    if segments.is_empty() {
+        return Ok(TopicAnalysisResult { topics: Vec::new() });
+    }
+
+    let transcript_lines = segments
+        .iter()
+        .map(|segment| {
+            let speaker_prefix = segment
+                .speaker_label
+                .as_ref()
+                .map(|label| format!(" [{}]", label))
+                .unwrap_or_default();
+            format!(
+                "- id={} [{}-{}]{} {}",
+                segment.id,
+                format_ms(segment.start_ms),
+                format_ms(segment.end_ms.unwrap_or(segment.start_ms)),
+                speaker_prefix,
+                segment.text.replace('\n', " ")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let system_prompt = r#"You segment meeting transcripts into stable topic sections.
+
+Return ONLY valid JSON matching this schema:
+{
+  "topics": [
+    {
+      "id": "topic-1",
+      "title": "Short topic title in the transcript's language",
+      "segment_ids": ["segment-id-1", "segment-id-2"],
+      "confidence": 0.0
+    }
+  ]
+}
+
+Rules:
+- Cover every transcript segment exactly once.
+- Keep original segment order.
+- Create a new topic when agenda, project, issue, decision, or dashboard context clearly changes.
+- Prefer semantic context changes over repeated business keywords.
+- Use concise titles in the transcript language.
+- Do not omit or duplicate any segment id.
+- Do not output markdown or explanation."#;
+
+    let user_prompt = format!(
+        "Segment this meeting transcript into ordered topic sections.\n\n<segments>\n{}\n</segments>",
+        transcript_lines
+    );
+
+    let raw_response = generate_summary(
+        client,
+        provider,
+        model_name,
+        api_key,
+        system_prompt,
+        &user_prompt,
+        ollama_endpoint,
+        custom_openai_endpoint,
+        max_tokens,
+        temperature,
+        top_p,
+        app_data_dir,
+        None,
+    )
+    .await?;
+
+    let payload = extract_json_payload(&raw_response)?;
+    let parsed: TopicAnalysisResult =
+        serde_json::from_str(&payload).map_err(|e| format!("Invalid topic analysis JSON: {}", e))?;
+
+    normalize_topic_analysis(parsed, segments)
+}
+
+fn normalize_topic_analysis(
+    mut result: TopicAnalysisResult,
+    segments: &[TopicAnalysisSegment],
+) -> Result<TopicAnalysisResult, String> {
+    let segment_order: std::collections::HashMap<&str, usize> = segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| (segment.id.as_str(), index))
+        .collect();
+
+    let mut seen = std::collections::HashSet::new();
+    for topic in result.topics.iter_mut() {
+        topic.segment_ids.retain(|segment_id| {
+            segment_order.contains_key(segment_id.as_str()) && seen.insert(segment_id.clone())
+        });
+        topic.segment_ids.sort_by_key(|segment_id| segment_order.get(segment_id.as_str()).copied());
+    }
+
+    result.topics.retain(|topic| !topic.segment_ids.is_empty());
+
+    let missing_segments: Vec<String> = segments
+        .iter()
+        .filter(|segment| !seen.contains(&segment.id))
+        .map(|segment| segment.id.clone())
+        .collect();
+
+    if !missing_segments.is_empty() {
+        if let Some(last_topic) = result.topics.last_mut() {
+            last_topic.segment_ids.extend(missing_segments);
+        } else {
+            result.topics.push(TopicAnalysisTopic {
+                id: "topic-1".to_string(),
+                title: "General Discussion".to_string(),
+                segment_ids: missing_segments,
+                confidence: Some(0.4),
+            });
+        }
+    }
+
+    result.topics.sort_by_key(|topic| {
+        topic.segment_ids
+            .first()
+            .and_then(|segment_id| segment_order.get(segment_id.as_str()).copied())
+            .unwrap_or(usize::MAX)
+    });
+
+    if result.topics.is_empty() {
+        return Err("LLM returned no usable topic sections".to_string());
+    }
+
+    Ok(result)
+}
+
+fn format_ms(value: u64) -> String {
+    let total_seconds = value / 1000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    format!("{:02}:{:02}", minutes, seconds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        extract_json_payload, normalize_topic_analysis, TopicAnalysisResult, TopicAnalysisSegment,
+        TopicAnalysisTopic,
+    };
+
+    #[test]
+    fn extracts_json_from_fenced_response() {
+        let raw = "```json\n{\"topics\":[{\"id\":\"topic-1\",\"title\":\"QA\",\"segmentIds\":[\"s1\"],\"confidence\":0.9}]}\n```";
+        let payload = extract_json_payload(raw).expect("json payload should be extracted");
+        assert!(payload.contains("\"topics\""));
+    }
+
+    #[test]
+    fn normalizes_missing_segment_assignments() {
+        let segments = vec![
+            TopicAnalysisSegment {
+                id: "s1".to_string(),
+                start_ms: 0,
+                end_ms: Some(1000),
+                text: "first".to_string(),
+                speaker_label: None,
+            },
+            TopicAnalysisSegment {
+                id: "s2".to_string(),
+                start_ms: 1000,
+                end_ms: Some(2000),
+                text: "second".to_string(),
+                speaker_label: None,
+            },
+        ];
+
+        let result = TopicAnalysisResult {
+            topics: vec![TopicAnalysisTopic {
+                id: "topic-1".to_string(),
+                title: "Initial".to_string(),
+                segment_ids: vec!["s1".to_string()],
+                confidence: Some(0.8),
+            }],
+        };
+
+        let normalized = normalize_topic_analysis(result, &segments).expect("normalization should succeed");
+        assert_eq!(normalized.topics.len(), 1);
+        assert_eq!(normalized.topics[0].segment_ids, vec!["s1".to_string(), "s2".to_string()]);
+    }
 }

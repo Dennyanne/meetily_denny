@@ -5,6 +5,8 @@ import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 import { useMemo } from 'react';
+import { applyTopicSegmentation } from '@/lib/transcriptAnalysis';
+import { useTopicSegmentation } from '@/hooks/useTopicSegmentation';
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -49,20 +51,33 @@ export function TranscriptPanel({
   meetingFolderPath,
   onRefetchTranscripts,
 }: TranscriptPanelProps) {
+  const { segments: llmSegments } = useTopicSegmentation(transcripts, isRecording, meetingId);
+
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
     if (usePagination && segments) {
-      return segments;
+      const llmTopics = llmSegments
+        .filter((segment) => segment.topicId && segment.topicTitle)
+        .reduce<Array<{ id: string; title: string; segmentIds: string[] }>>((topics, segment) => {
+          const existing = topics.find((topic) => topic.id === segment.topicId);
+          if (existing) {
+            existing.segmentIds.push(segment.id);
+            return topics;
+          }
+
+          topics.push({
+            id: segment.topicId as string,
+            title: segment.topicTitle as string,
+            segmentIds: [segment.id],
+          });
+          return topics;
+        }, []);
+
+      return applyTopicSegmentation(segments, llmTopics);
     }
-    // Convert transcripts to segments for virtualization
-    return transcripts.map(t => ({
-      id: t.id,
-      timestamp: t.audio_start_time ?? 0,
-      endTime: t.audio_end_time,
-      text: t.text,
-      confidence: t.confidence,
-    }));
-  }, [transcripts, usePagination, segments]);
+
+    return llmSegments;
+  }, [llmSegments, usePagination, segments]);
 
   return (
     <div className="hidden md:flex md:w-1/4 lg:w-1/3 min-w-0 border-r border-gray-200 bg-white flex-col relative shrink-0">

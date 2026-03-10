@@ -632,6 +632,9 @@ pub fn run() {
             api::api_test_custom_openai_connection,
             // Summary commands
             summary::api_process_transcript,
+            summary::api_segment_topics,
+            summary::api_get_topic_segmentation,
+            summary::api_save_topic_segmentation,
             summary::api_get_summary,
             summary::api_save_meeting_summary,
             summary::api_cancel_summary,
